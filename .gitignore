@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+*.log
+__pycache__/
+*.pyc
+venv/
+env/
+.pytest_cache/
+test_templates.py
+out.txt
+output.txt
