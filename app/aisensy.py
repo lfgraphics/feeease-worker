@@ -18,14 +18,15 @@ def normalise_phone(phone: str) -> Optional[str]:
     if not phone:
         return None
     cleaned = re.sub(r"[^\d+]", "", phone)
-    
+
     # Needs to match pattern: ^(|\\+?91)\\d{10}$ (or similar, assuming prepends if local)
     if cleaned.startswith("+"):
         return cleaned[1:]
     if len(cleaned) == 10:
         return f"91{cleaned}"  # Default mapping for Indian 10-digit numbers
-        
+
     return cleaned
+
 
 async def send_aisensy_message(
     campaign_name: str,
@@ -35,9 +36,11 @@ async def send_aisensy_message(
     template_params: List[str] = None,
     media: Optional[Dict[str, str]] = None,
     tags: Optional[List[str]] = None,
-    attributes: Optional[Dict[str, str]] = None
+    attributes: Optional[Dict[str, str]] = None,
+    button_params: Optional[Dict[str, Any]] = None,
+    buttons: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    
+
     api_key = os.environ.get("AISENSY_API_KEY", "")
     if not api_key:
         return {"success": False, "error": "AISENSY_API_KEY is missing entirely on worker."}
@@ -53,7 +56,7 @@ async def send_aisensy_message(
         "userName": user_name,
         "source": source
     }
-    
+
     if media:
         payload["media"] = media
     if template_params:
@@ -62,15 +65,19 @@ async def send_aisensy_message(
         payload["tags"] = tags
     if attributes:
         payload["attributes"] = attributes
+    if button_params:
+        payload["buttonParams"] = button_params
+    if buttons:
+        payload["buttons"] = buttons
 
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(AISENSY_BASE_URL, json=payload, timeout=10.0)
-            
+
         data = resp.json()
-        
+
         is_success = str(data.get("success", "false")).lower() == "true"
-        
+
         if resp.status_code in (200, 201, 202) and is_success:
             msg_id = data.get("messageId") or data.get("submitted_message_id") or "sent"
             return {"success": True, "messageId": msg_id}

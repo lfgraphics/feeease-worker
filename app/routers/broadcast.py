@@ -70,6 +70,18 @@ class ReceiptRequest(BaseModel):
     month: Optional[str] = None
     media: Optional[MediaModel] = None
 
+
+class OtpRequest(BaseModel):
+    schoolId: str
+    licenseKey: str
+    campaignName: str
+    phone: str
+    userName: str
+    otp: str
+    validity: str = "5 minutes"
+    source: Optional[str] = None
+
+
 # -------------------------------------------------------------------------
 # Utilities
 # -------------------------------------------------------------------------
@@ -282,7 +294,58 @@ async def send_receipt(payload: ReceiptRequest):
 
     base_source = payload.source or f"FeeEase - {school_name}"
     res = await send_aisensy_message(payload.campaignName, payload.phone, payload.parentName, base_source, template_params, media_dict)
-    
+
+    if res.get("success"):
+        await update_usage_counter(db, payload.schoolId, 1)
+        return {"success": True, "messageId": res.get("messageId")}
+    else:
+        raise HTTPException(status_code=500, detail=res.get("error", "Unknown error"))
+
+
+@router.post("/api/v1/whatsapp/otp")
+async def send_otp(payload: OtpRequest):
+    db = await connect_feeease()
+    school, school_name = await validate_auth_limits(
+        db, payload.schoolId, payload.licenseKey, 1
+    )
+
+    # RBAC: Ensure parent or teacher login is enabled in centralized features
+    features = school.get("features", {})
+    if not features.get("parentsLogin") and not features.get("teachersLogin"):
+        raise HTTPException(
+            status_code=403, 
+            detail="OTP Login is disabled for this school (Both Parents & Teachers portals are inactive)"
+        )
+
+    template_params = [
+        sanitize_param(payload.otp),  # {{1}} OTP Code
+    ]
+
+    base_source = payload.source or f"FeeEase - {school_name}"
+
+    # For Authentication templates, AiSensy Campaign API v2 can be tricky.
+    # We send both the 'buttons' component list and the 'buttonParams' object to be safe.
+    button_params = {"text": sanitize_param(payload.otp)}
+    buttons = [
+        {
+            "type": "button",
+            "sub_type": "url",
+            "index": 0,
+            "parameters": [{"type": "text", "text": sanitize_param(payload.otp)}],
+        }
+    ]
+
+    res = await send_aisensy_message(
+        payload.campaignName,
+        payload.phone,
+        payload.userName,
+        base_source,
+        template_params=template_params,
+        button_params=button_params,
+        buttons=buttons,
+    )
+
+
     if res.get("success"):
         await update_usage_counter(db, payload.schoolId, 1)
         return {"success": True, "messageId": res.get("messageId")}

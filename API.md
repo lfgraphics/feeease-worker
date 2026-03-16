@@ -82,6 +82,37 @@ The worker automatically transforms incoming JSON payloads into the flat paramet
 
 ---
 
+#### 4. Authentication OTP
+**Endpoint:** `POST /api/v1/whatsapp/otp`  
+**Campaign Variable Count:** 1 (plus 1 for button)
+
+| Input JSON Field | Worker sanitize Logic | AiSensy Placeholder | Description |
+| :--- | :--- | :--- | :--- |
+| `payload.otp` | Numeric string | `{{1}}` | Your OTP is [OTP] |
+
+**Note:** The worker handles the special `buttonParams` mapping required for AiSensy Campaign V2 Authentication templates. It automatically duplicates the `otp` into the button text field.
+
+**JSON Payload Example for Worker:**
+```json
+{
+  "schoolId": "...",
+  "licenseKey": "...",
+  "campaignName": "auth_otp",
+  "phone": "919876543210",
+  "userName": "John Doe",
+  "otp": "123456"
+}
+```
+
+**AiSensy Dashboard Template Design (Fixed Body):**
+> Your One-Time Password (OTP) for logging into your account is *{{1}}*.
+> 
+> This code is valid for 5 minutes. Please do not share this code with anyone.
+> 
+> _Thank You_
+
+---
+
 ### Implementation Notes
 
 1. **Wait times:** The worker enforces a 500ms sleep between individual messages in bulk mode to ensure stability and avoid AiSensy rate limits.
