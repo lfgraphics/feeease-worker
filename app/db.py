@@ -22,7 +22,7 @@ async def connect_feeease():
     
     # Extract DB name from URI or fallback to "test"
     parsed_uri = urllib.parse.urlparse(uri)
-    db_name = parsed_uri.path[1:] if parsed_uri.path else "test"
+    db_name = parsed_uri.path.strip('/') or "test"
     
     feeease_db = motor.motor_asyncio.AsyncIOMotorDatabase(feeease_client, db_name)
     return feeease_db
@@ -38,6 +38,6 @@ async def get_school_db(uri: str):
     client = motor.motor_asyncio.AsyncIOMotorClient(uri, serverSelectionTimeoutMS=5000)
     
     parsed_uri = urllib.parse.urlparse(uri)
-    db_name = parsed_uri.path[1:] if parsed_uri.path else "test"
+    db_name = parsed_uri.path.strip('/') or "test"
     
     return motor.motor_asyncio.AsyncIOMotorDatabase(client, db_name), client
