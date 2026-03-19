@@ -6,7 +6,7 @@ load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import broadcast
+from app.routers import broadcast, picky_assist
 from app.db import connect_feeease
 
 load_dotenv()
@@ -41,3 +41,4 @@ async def health_check():
 
 # Include specific routers
 app.include_router(broadcast.router)
+app.include_router(picky_assist.router)

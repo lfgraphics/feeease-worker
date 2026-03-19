@@ -1,26 +1,90 @@
-# FeeEase Worker (feeease-worker)
+# FeeEase WhatsApp Worker
 
-FeeEase Worker is a high-performance Python/FastAPI backend microservice tasked with executing heavy background calculations and batch processing outside of the core user interface thread.
+Centralized background worker for handling WhatsApp notifications via AiSensy and Picky Assist.
 
-As FeeEase (the admin panel) and its tenant projects (like `modern-nursery` and other modular schools) serve web interfaces in real time via Next.js and Vercel, serverless deployments naturally incur severe timeouts for long-running workflows (e.g. 10-second boundaries for Vercel Free / Pro tiers). 
+## Environment Variables
 
-**The FeeEase worker solves this by accepting "jobs" spanning multiple minutes to background process safely.**
+Configure these variables in your worker's `.env` file or environment settings.
 
-## Primary Use Cases
+### Provider Credentials
+| Variable | Description |
+| :--- | :--- |
+| `PICKY_ASSIST_TOKEN` | API Token from Picky Assist Push API (V2). |
+| `PICKY_ASSIST_APPLICATION_ID` | Application ID from Picky Assist (typically 8). Default is 8. |
+| `AISENSY_API_KEY` | API Key from AiSensy Campaign API. |
+| `AISENSY_BASE_URL` | AiSensy API Endpoint. Default is `https://backend.aisensy.com/campaign/t1/api/v2`. |
 
-1. **WhatsApp Broadcast Orchestration:** The core capability today. Next.js builds complex student rosters for notifications, reminders, or exam results and sends them via JSON lists to the worker. The worker chunks them, processes strict `AiSensy` structural validations, formats the templates correctly for variables, and delivers massive bulk webhook updates back to the front-end when completed, without Next.js Vercel functions silently dying mid-execution due to timeouts.
+### Template Mapping (AiSensy)
+| Variable | Default Value |
+| :--- | :--- |
+| `AISENSY_TEMPLATE_UNIVERSAL_TEXT` | `boradcast_text` |
+| `AISENSY_TEMPLATE_UNIVERSAL_IMAGE` | `broadcast_image` |
+| `AISENSY_TEMPLATE_RECEIPT` | `fee_receipt_v1` |
+| `AISENSY_TEMPLATE_OTP` | `login_otp` |
+| `AISENSY_TEMPLATE_REMINDER_ENGLISH` | `reminder_english` |
+| `AISENSY_TEMPLATE_REMINDER_HINDI` | `reminder_hindi` |
+| `AISENSY_TEMPLATE_REMINDER_URDU` | `reminder_urdu` |
 
-2. **Decoupled Business Logic:** Designed modularly so future features such as Biometric Integrations, C++ embedded software handlers, bulk Excel ingestion processing, or heavy database migrations can all securely attach to the architecture and be cleanly processed away from Next.js limitations.
+### Template Mapping (Picky Assist)
+| Variable | Default Value |
+| :--- | :--- |
+| `PICKY_ASSIST_TEMPLATE_UNIVERSAL_TEXT` | `boradcast_text` |
+| `PICKY_ASSIST_TEMPLATE_UNIVERSAL_IMAGE` | `broadcast_image` |
+| `PICKY_ASSIST_TEMPLATE_RECEIPT` | `fee_receipt_v1` |
+| `PICKY_ASSIST_TEMPLATE_OTP` | `login_otp` |
+| `PICKY_ASSIST_TEMPLATE_REMINDER_ENGLISH` | `reminder_english` |
+| `PICKY_ASSIST_TEMPLATE_REMINDER_HINDI` | `reminder_hindi` |
+| `PICKY_ASSIST_TEMPLATE_REMINDER_URDU` | `reminder_urdu` |
 
-## Core Features
-*   **MongoDB Auto-resolving.** Decrypts individual school databases from the primary FeeEase tenant engine to act on individual databases.
-*   **Usage Tracking.** Ensures the limits defined by `feeease` (License Key, Quotas) are respected.
-*   **AiSensy Native Validation.** Sanitizes text and structural templates directly so they adhere strictly to string, tab, newline and sequential parameters defined by official WhatsApp marketing endpoints.
-*   **Anti-Spam & Trust Measures.** Automatically injects verified school identity (from the licensed database) into sensitive communications like fee reminders and broadcast notifications to ensure recipients identify the source.
+---
 
-## Getting Started
+## Recommended Template Body Structures
 
-1. Clone repo, setup `venv`.
-2. Install pip modules `pip install -r requirements.txt`.
-3. Provide `.env`. (See `.env.example`).
-4. Run: `uvicorn app.main:app --host 0.0.0.0 --port 4000 --reload`
+When creating templates in AiSensy or Picky Assist, use the following structures for the variables to match the worker's payloads.
+
+### 1. Fee Receipt (`receipt`)
+**Context**: Sent after a successful fee payment. Includes a media attachment (the receipt image).
+**Body**:
+> Dear **{{1}}**, Fee payment for student **{{2}}** of amount **{{3}}** is successful with receipt no **{{4}}** for the month **{{5}}**.
+*   `{{1}}`: Parent Name
+*   `{{2}}`: Student Name
+*   `{{3}}`: Amount
+*   `{{4}}`: Receipt Number
+*   `{{5}}`: Month/Session
+
+### 2. Fee Reminders (`reminder_...`)
+**Context**: Bulk reminders sent to parents for unpaid fees.
+**Body**:
+> Dear **{{1}}**, This is a reminder from **{{2}}** for student **{{3}}**. An amount of **{{4}}** is due for **{{5}}**. Please pay soon.
+*   `{{1}}`: Parent Name
+*   `{{2}}`: School Name
+*   `{{3}}`: Student Name
+*   `{{4}}`: Due Amount
+*   `{{5}}`: Month/Session
+
+### 3. Login OTP (`otp`)
+**Context**: Authentication codes for parents or teachers.
+**Body**:
+> Your login OTP for FeeEase is **{{1}}**. Please do not share this code with anyone.
+*   `{{1}}`: OTP Code
+
+### 4. Universal Broadcasts (`universal_text` / `universal_image`)
+**Context**: General announcements from the school.
+**Body**:
+> Dear **{{1}}**, This is an update from **{{2}}**:
+> 
+> **{{3}}**
+*   `{{1}}`: Recipient Name
+*   `{{2}}`: School Name
+*   `{{3}}`: Message Body
+
+---
+
+## Technical Architecture
+
+The worker implements a **Split-Provider Proxy Architecture**:
+1.  **Platform Neutral**: The central platform (`feeease`) and school applications (`modern-nursery`) do not store template IDs.
+2.  **Endpoint Routing**: Provider selection is handled by the URL path:
+    *   AiSensy: `POST /api/v1/whatsapp/[action]`
+    *   Picky Assist: `POST /picky-assist/api/v1/whatsapp/[action]`
+3.  **Variable Masking**: The worker handles the transformation between AiSensy's `template { title, params }` format and Picky Assist's `recipients [{ number, template_message }]` format automatically.

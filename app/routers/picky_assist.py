@@ -3,7 +3,7 @@ from pydantic import BaseModel, HttpUrl
 from typing import List, Optional, Dict, Any
 from bson import ObjectId
 from app.db import connect_feeease
-from app.aisensy import send_aisensy_message
+from app.picky_assist import send_picky_assist_message
 from app.webhook import deliver_webhook
 from app.config import settings
 import asyncio
@@ -12,7 +12,7 @@ import re
 from datetime import datetime
 import os
 
-router = APIRouter()
+router = APIRouter(prefix="/picky-assist/api/v1/whatsapp", tags=["Picky Assist WhatsApp"])
 
 # -------------------------------------------------------------------------
 # Shared Models
@@ -153,129 +153,140 @@ async def update_usage_counter(db, school_id: str, success_count: int):
 # -------------------------------------------------------------------------
 # Processors
 # -------------------------------------------------------------------------
-async def process_notification_job(payload: NotificationRequest, school: dict, job_id: str, is_image: bool = False):
-    template_id = settings.AISENSY_TEMPLATES["universal_image"] if is_image else settings.AISENSY_TEMPLATES["universal_text"]
+async def process_notification_job_picky(payload: NotificationRequest, school: dict, job_id: str, is_image: bool = False):
+    template_id = settings.PICKY_ASSIST_TEMPLATES["universal_image"] if is_image else settings.PICKY_ASSIST_TEMPLATES["universal_text"]
     school_name = school.get("name", "Unknown School")
-    base_source = payload.source or f"FeeEase - {school_name}"
+    print(f"[Worker/Picky] Notification ({template_id}) for {payload.schoolId} ({len(payload.recipients)} recs)")
     
-    success_count = failed_count = skipped_count = 0
-    results = []
-
+    picky_recipients = []
     notif_type = sanitize_param(payload.notificationType)
     main_msg = sanitize_param(payload.mainMessage)
 
     for rec in payload.recipients:
-        if not rec.phone:
-            skipped_count += 1
-            results.append({"phone": "Unknown", "status": "skipped", "error": "No phone number", "id": rec.studentName})
-            continue
-
-        template_params = [
+        template_vars = [
             sanitize_param(rec.parentName),
             notif_type,
             sanitize_param(school_name),
             sanitize_param(rec.studentName),
             main_msg
         ]
+        entry = {
+            "number": rec.phone,
+            "template_message": template_vars,
+            "language": "en"
+        }
+        if payload.media:
+            entry["media"] = str(payload.media.url)
+        picky_recipients.append(entry)
 
-        media_dict = {"url": str(payload.media.url), "filename": payload.media.filename} if payload.media else None
+    res = await send_picky_assist_message(
+        template_id=template_id,
+        recipients=picky_recipients
+    )
 
-        res = await send_aisensy_message(template_id, rec.phone, rec.parentName, base_source, template_params, media_dict)
-        
-        if res.get("success"):
-            success_count += 1
-            results.append({"phone": rec.phone, "status": "success", "messageId": res.get("messageId"), "id": rec.studentName})
-        else:
-            failed_count += 1
-            results.append({"phone": rec.phone, "status": "failed", "error": res.get("error"), "id": rec.studentName})
-            
-        await asyncio.sleep(0.5)
+    success_count = 0
+    failed_count = 0
+    results = []
 
-    summary = { "jobId": job_id, "mode": "bulk", "total": len(payload.recipients), "success": success_count, "failed": failed_count, "skipped": skipped_count, "results": results }
+    if res.get("success"):
+        success_count = len(picky_recipients)
+        for rec in payload.recipients:
+            results.append({"phone": rec.phone, "status": "success", "id": rec.studentName})
+    else:
+        failed_count = len(picky_recipients)
+        err = res.get("error", "Picky Assist Batch Failure")
+        for rec in payload.recipients:
+            results.append({"phone": rec.phone, "status": "failed", "error": err, "id": rec.studentName})
+
+    summary = { "jobId": job_id, "mode": "bulk", "total": len(payload.recipients), "success": success_count, "failed": failed_count, "results": results }
     db = await connect_feeease()
     await update_usage_counter(db, payload.schoolId, success_count)
     if payload.webhookUrl:
         mongo_uri = school.get("deployment", {}).get("mongoDbUri", "")
         await deliver_webhook(payload.schoolId, str(payload.webhookUrl), job_id, summary, mongo_uri)
 
-
-async def process_reminders_job(payload: ReminderRequest, school: dict, job_id: str):
-    template_id = settings.AISENSY_TEMPLATES.get(f"reminder_{payload.language}", settings.AISENSY_TEMPLATES["reminder_english"])
+async def process_reminders_job_picky(payload: ReminderRequest, school: dict, job_id: str):
     school_name = school.get("name", "Unknown School")
-    base_source = payload.source or f"FeeEase - {school_name}"
+    template_id = settings.PICKY_ASSIST_TEMPLATES.get(f"reminder_{payload.language}", settings.PICKY_ASSIST_TEMPLATES["reminder_english"])
+    print(f"[Worker/Picky] Reminders ({template_id}) for {payload.schoolId} ({len(payload.recipients)} recs)")
     
-    success_count = failed_count = skipped_count = 0
-    results = []
-
+    picky_recipients = []
     for rec in payload.recipients:
-        if not rec.phone:
-            skipped_count += 1
-            results.append({"phone": "Unknown", "status": "skipped", "error": "No phone", "id": rec.studentName})
-            continue
-
-        template_params = [
+        template_vars = [
             sanitize_param(rec.parentName),
             sanitize_param(school_name),
             sanitize_param(rec.studentName),
             sanitize_param(rec.dueAmount),
             sanitize_param(rec.month)
         ]
+        picky_recipients.append({
+            "number": rec.phone,
+            "template_message": template_vars,
+            "language": "en"
+        })
 
-        res = await send_aisensy_message(template_id, rec.phone, rec.parentName, base_source, template_params)
-        
-        if res.get("success"):
-            success_count += 1
-            results.append({"phone": rec.phone, "status": "success", "messageId": res.get("messageId"), "id": rec.studentName})
-        else:
-            failed_count += 1
-            results.append({"phone": rec.phone, "status": "failed", "error": res.get("error"), "id": rec.studentName})
-            
-        await asyncio.sleep(0.5)
+    res = await send_picky_assist_message(
+        template_id=template_id,
+        recipients=picky_recipients
+    )
 
-    summary = { "jobId": job_id, "mode": "bulk", "total": len(payload.recipients), "success": success_count, "failed": failed_count, "skipped": skipped_count, "results": results }
+    success_count = 0
+    failed_count = 0
+    results = []
+
+    if res.get("success"):
+        success_count = len(picky_recipients)
+        for rec in payload.recipients:
+            results.append({"phone": rec.phone, "status": "success", "id": rec.studentName})
+    else:
+        failed_count = len(picky_recipients)
+        err = res.get("error", "Picky Assist Batch Failure")
+        for rec in payload.recipients:
+            results.append({"phone": rec.phone, "status": "failed", "error": err, "id": rec.studentName})
+
+    summary = { "jobId": job_id, "mode": "bulk", "total": len(payload.recipients), "success": success_count, "failed": failed_count, "results": results }
     db = await connect_feeease()
     await update_usage_counter(db, payload.schoolId, success_count)
     if payload.webhookUrl:
         mongo_uri = school.get("deployment", {}).get("mongoDbUri", "")
         await deliver_webhook(payload.schoolId, str(payload.webhookUrl), job_id, summary, mongo_uri)
 
-
 # -------------------------------------------------------------------------
 # API Endpoints
 # -------------------------------------------------------------------------
 
-@router.post("/api/v1/whatsapp/broadcast/text")
-async def broadcast_text(payload: NotificationRequest, background_tasks: BackgroundTasks):
+@router.post("/broadcast/text")
+async def broadcast_text_picky(payload: NotificationRequest, background_tasks: BackgroundTasks):
     db = await connect_feeease()
     school, school_name = await validate_auth_limits(db, payload.schoolId, payload.licenseKey, len(payload.recipients))
     job_id = payload.jobId or str(uuid.uuid4())
-    background_tasks.add_task(process_notification_job, payload, school, job_id, False)
+    background_tasks.add_task(process_notification_job_picky, payload, school, job_id, False)
     return {"success": True, "jobId": job_id, "status": "processing"}
 
-@router.post("/api/v1/whatsapp/broadcast/image")
-async def broadcast_image(payload: NotificationRequest, background_tasks: BackgroundTasks):
+@router.post("/broadcast/image")
+async def broadcast_image_picky(payload: NotificationRequest, background_tasks: BackgroundTasks):
     if not payload.media:
         raise HTTPException(status_code=400, detail="Image broadcast requires media payload")
     db = await connect_feeease()
     school, school_name = await validate_auth_limits(db, payload.schoolId, payload.licenseKey, len(payload.recipients))
     job_id = payload.jobId or str(uuid.uuid4())
-    background_tasks.add_task(process_notification_job, payload, school, job_id, True)
+    background_tasks.add_task(process_notification_job_picky, payload, school, job_id, True)
     return {"success": True, "jobId": job_id, "status": "processing"}
 
-@router.post("/api/v1/whatsapp/reminders")
-async def run_reminders(payload: ReminderRequest, background_tasks: BackgroundTasks):
+@router.post("/reminders")
+async def run_reminders_picky(payload: ReminderRequest, background_tasks: BackgroundTasks):
     db = await connect_feeease()
     school, school_name = await validate_auth_limits(db, payload.schoolId, payload.licenseKey, len(payload.recipients))
     job_id = payload.jobId or str(uuid.uuid4())
-    background_tasks.add_task(process_reminders_job, payload, school, job_id)
+    background_tasks.add_task(process_reminders_job_picky, payload, school, job_id)
     return {"success": True, "jobId": job_id, "status": "processing"}
 
-@router.post("/api/v1/whatsapp/receipt")
-async def send_receipt(payload: ReceiptRequest):
+@router.post("/receipt")
+async def send_receipt_picky(payload: ReceiptRequest):
     db = await connect_feeease()
     school, school_name = await validate_auth_limits(db, payload.schoolId, payload.licenseKey, 1)
 
-    template_params = [
+    template_vars = [
         sanitize_param(payload.parentName),
         sanitize_param(payload.studentName),
         sanitize_param(payload.amount),
@@ -283,52 +294,36 @@ async def send_receipt(payload: ReceiptRequest):
         sanitize_param(payload.month or ""),
         sanitize_param(school_name)
     ]
-    media_dict = {"url": str(payload.media.url), "filename": payload.media.filename} if payload.media else None
-
-    base_source = payload.source or f"FeeEase - {school_name}"
-    res = await send_aisensy_message(settings.AISENSY_TEMPLATES["receipt"], payload.phone, payload.parentName, base_source, template_params, media_dict)
-
-    if res.get("success"):
-        await update_usage_counter(db, payload.schoolId, 1)
-        return {"success": True, "messageId": res.get("messageId")}
-    else:
-        raise HTTPException(status_code=500, detail=res.get("error", "Unknown error"))
-
-
-@router.post("/api/v1/whatsapp/otp")
-async def send_otp(payload: OtpRequest):
-    db = await connect_feeease()
-    school, school_name = await validate_auth_limits(db, payload.schoolId, payload.licenseKey, 1)
-
-    features = school.get("features", {})
-    if not features.get("parentsLogin") and not features.get("teachersLogin"):
-        raise HTTPException(status_code=403, detail="OTP Login is disabled for this school")
-
-    template_params = [sanitize_param(payload.otp)]
-    base_source = payload.source or f"FeeEase - {school_name}"
-
-    button_params = {"text": sanitize_param(payload.otp)}
-    buttons = [
-        {
-            "type": "button",
-            "sub_type": "url",
-            "index": 0,
-            "parameters": [{"type": "text", "text": sanitize_param(payload.otp)}],
-        }
-    ]
-
-    res = await send_aisensy_message(
-        settings.AISENSY_TEMPLATES["otp"],
-        payload.phone,
-        payload.userName,
-        base_source,
-        template_params=template_params,
-        button_params=button_params,
-        buttons=buttons,
+    
+    res = await send_picky_assist_message(
+        template_id=settings.PICKY_ASSIST_TEMPLATES["receipt"],
+        recipients=[{
+            "number": payload.phone,
+            "template_message": template_vars,
+            "media": str(payload.media.url) if payload.media else None
+        }]
     )
 
     if res.get("success"):
         await update_usage_counter(db, payload.schoolId, 1)
-        return {"success": True, "messageId": res.get("messageId")}
+        return {"success": True, "messageId": "sent"}
+    else:
+        raise HTTPException(status_code=500, detail=res.get("error", "Unknown error"))
+
+@router.post("/otp")
+async def send_otp_picky(payload: OtpRequest):
+    db = await connect_feeease()
+    school, school_name = await validate_auth_limits(db, payload.schoolId, payload.licenseKey, 1)
+
+    template_vars = [sanitize_param(payload.otp)]
+    
+    res = await send_picky_assist_message(
+        template_id=settings.PICKY_ASSIST_TEMPLATES["otp"],
+        recipients=[{"number": payload.phone, "template_message": template_vars}]
+    )
+
+    if res.get("success"):
+        await update_usage_counter(db, payload.schoolId, 1)
+        return {"success": True, "messageId": "sent"}
     else:
         raise HTTPException(status_code=500, detail=res.get("error", "Unknown error"))
