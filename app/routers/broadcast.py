@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Header
 from pydantic import BaseModel, HttpUrl
 from typing import List, Optional, Dict, Any
 from bson import ObjectId
@@ -75,8 +75,19 @@ class OtpRequest(BaseModel):
     phone: str
     userName: str
     otp: str
+    role: Optional[str] = "user"
+    schoolName: Optional[str] = None
     validity: str = "5 minutes"
     source: Optional[str] = None
+
+
+class SystemOtpRequest(BaseModel):
+    phone: str
+    userName: str
+    otp: str
+    role: Optional[str] = "admin"
+    schoolName: Optional[str] = "FeeEase"
+    source: Optional[str] = "FeeEase System"
 
 
 # -------------------------------------------------------------------------
@@ -89,6 +100,17 @@ def sanitize_param(text: str) -> str:
     text = re.sub(r'[\n\r]+', ' ', text)
     text = re.sub(r' {4,}', '   ', text)
     return text.strip()
+
+
+def validate_webhook_secret(authorization: str):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401, detail="Missing or invalid Authorization header"
+        )
+    token = authorization.split(" ")[1]
+    if token != settings.WORKER_WEBHOOK_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid webhook secret")
+
 
 async def validate_auth_limits(db, school_id: str, license_key: str, cost: int):
     try:
@@ -329,6 +351,41 @@ async def send_otp(payload: OtpRequest):
 
     if res.get("success"):
         await update_usage_counter(db, payload.schoolId, 1)
+        return {"success": True, "messageId": res.get("messageId")}
+    else:
+        raise HTTPException(status_code=500, detail=res.get("error", "Unknown error"))
+
+
+@router.post("/api/v1/system/otp")
+async def send_system_otp(
+    payload: SystemOtpRequest, authorization: Optional[str] = Header(None)
+):
+    validate_webhook_secret(authorization)
+
+    template_params = [sanitize_param(payload.otp)]
+    base_source = payload.source or "FeeEase System"
+
+    button_params = {"text": sanitize_param(payload.otp)}
+    buttons = [
+        {
+            "type": "button",
+            "sub_type": "url",
+            "index": 0,
+            "parameters": [{"type": "text", "text": sanitize_param(payload.otp)}],
+        }
+    ]
+
+    res = await send_aisensy_message(
+        settings.AISENSY_TEMPLATES["otp"],
+        payload.phone,
+        payload.userName,
+        base_source,
+        template_params=template_params,
+        button_params=button_params,
+        buttons=buttons,
+    )
+
+    if res.get("success"):
         return {"success": True, "messageId": res.get("messageId")}
     else:
         raise HTTPException(status_code=500, detail=res.get("error", "Unknown error"))
