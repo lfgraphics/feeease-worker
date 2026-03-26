@@ -18,6 +18,10 @@ async def connect_feeease():
     if not uri:
         raise ValueError("FEEEASE_MONGODB_URI is not set")
 
+    # Sanitize URI to remove invalid write concern if it exists
+    if "w=majority/test" in uri:
+        uri = uri.replace("w=majority/test", "w=majority")
+
     feeease_client = motor.motor_asyncio.AsyncIOMotorClient(uri)
     
     # Extract DB name from URI or fallback to "test"
@@ -34,6 +38,10 @@ async def get_school_db(uri: str):
     """
     if not uri:
         raise ValueError("Missing mongoDbUri for school database")
+
+    # Sanitize URI to remove invalid write concern if it exists
+    if "w=majority/test" in uri:
+        uri = uri.replace("w=majority/test", "w=majority")
 
     client = motor.motor_asyncio.AsyncIOMotorClient(uri, serverSelectionTimeoutMS=5000)
     
