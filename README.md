@@ -1,6 +1,15 @@
-# FeeEase WhatsApp Worker
+# FeeEase Worker
 
-Centralized background worker for handling WhatsApp notifications via AiSensy and Picky Assist.
+Centralized background worker for handling heavy compute and background tasks.
+
+## 🛠 Microservice Architecture
+
+The FeeEase system is built as a distributed microservice architecture to ensure scalability and separation of concerns:
+
+- **[FeeEase Platform](https://github.com/lfgraphics/feeease)**: The central hub and landing page ([feeease.com](https://feeease.com)). Handles school discovery, registration and management.
+- **[Modern Nursery](https://github.com/lfgraphics/feeease)**: The primary School Management System (SMS). A secure, role-based application for registered schools to manage their school.
+- **[FeeEase Worker](https://github.com/lfgraphics/feeease-worker)**: A high-performance background worker handling asynchronous tasks such as WhatsApp broadcasting, automated reminders, and future biometric integrations.
+- **[Try FeeEase](https://github.com/lfgraphics/try-school-management)**: A browser-based trial environment ([try.feeease.com](https://try.feeease.com)) that allows prospective schools to explore the system with zero-configuration and local storage.
 
 ## Environment Variables
 
