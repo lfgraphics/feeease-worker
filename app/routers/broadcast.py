@@ -11,8 +11,10 @@ import uuid
 import re
 from datetime import datetime
 import os
+from app.push_utils import broadcast_push_notifications
 
 router = APIRouter()
+
 
 # -------------------------------------------------------------------------
 # Shared Models
@@ -45,6 +47,8 @@ class NotificationRequest(BaseModel):
     mainMessage: str
     recipients: List[TextRecipientModel]
     media: Optional[MediaModel] = None
+    pushTargets: Optional[List[Dict[str, Any]]] = None
+
 
 class ReminderRequest(BaseModel):
     schoolId: str
@@ -55,6 +59,17 @@ class ReminderRequest(BaseModel):
     jobId: Optional[str] = None
     source: Optional[str] = None
     recipients: List[ReminderRecipientModel]
+    pushTargets: Optional[List[Dict[str, Any]]] = None
+
+class AppNotificationRequest(BaseModel):
+    schoolId: str
+    licenseKey: str
+    title: str
+    body: str
+    icon: Optional[str] = "/logo.jpeg"
+    pushTargets: List[Dict[str, Any]]
+
+
 
 class ReceiptRequest(BaseModel):
     schoolId: str
@@ -254,6 +269,21 @@ async def process_reminders_job(payload: ReminderRequest, school: dict, job_id: 
             
         await asyncio.sleep(0.5)
 
+    # Process Push Notifications (if any)
+    if payload.pushTargets:
+        push_data = {
+            "title": "Fee Reminder",
+            "body": f"Dear Parent, Fee for {school_name} is due. Please check details in the app.",
+            "icon": "/logo.jpeg"
+        }
+        # Run push in background/non-blocking
+        try:
+            await broadcast_push_notifications(payload.pushTargets, push_data)
+
+        except Exception as e:
+            print(f"[Worker Error] Push broadcast failed: {e}")
+
+
     summary = { "jobId": job_id, "mode": "bulk", "total": len(payload.recipients), "success": success_count, "failed": failed_count, "skipped": skipped_count, "results": results }
     db = await connect_feeease()
     await update_usage_counter(db, payload.schoolId, success_count)
@@ -389,3 +419,19 @@ async def send_system_otp(
         return {"success": True, "messageId": res.get("messageId")}
     else:
         raise HTTPException(status_code=500, detail=res.get("error", "Unknown error"))
+
+@router.post("/api/v1/app-notification")
+async def send_app_push_notifications(payload: AppNotificationRequest, background_tasks: BackgroundTasks, x_license_key: str = Header(None)):
+    if not x_license_key or x_license_key != payload.licenseKey:
+        raise HTTPException(status_code=401, detail="Invalid license key")
+    
+    push_data = {
+        "title": payload.title,
+        "body": payload.body,
+        "icon": payload.icon or "/logo.jpeg"
+    }
+
+    background_tasks.add_task(broadcast_push_notifications, payload.pushTargets, push_data)
+    
+    return {"success": True, "message": f"Push broadcast for {len(payload.pushTargets)} targets started."}
+
